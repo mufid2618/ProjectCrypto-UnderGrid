@@ -1,0 +1,12 @@
+# Baseline kompatibilitas: CPython 3.10 64-bit (sesuai prompt proyek).
+# face-recognition/dlib perlu instalasi native yang sesuai OS.
+streamlit==1.64.0
+cryptography==50.0.2
+argon2-cffi==25.1.0
+face-recognition==1.3.0
+opencv-python==4.10.0.84
+numpy==1.26.4
+Pillow==11.3.0
+psutil==7.1.0
+python-dotenv==1.1.1
+pytest==9.0.2
