@@ -1,0 +1,18 @@
+UNDERGRID - PANDUAN AKSES KATALOG
+=================================
+
+Selamat! Anda berhasil menyelesaikan tantangan Caesar Cipher.
+
+LANGKAH MENUJU KATALOG:
+1. Kembali ke aplikasi UNDERGRID.
+2. Pastikan Anda berada di halaman Dashboard.
+3. Masukkan kode rahasia pada bagian Catalog Access.
+4. Tekan tombol VERIFIKASI KODE.
+5. Jika kode benar, tombol BUKA CATALOG akan muncul di Dashboard.
+
+KODE RAHASIA KATALOG: UG-CATALOG-2026
+
+Catatan:
+Caesar Cipher digunakan sebagai tantangan pembelajaran.
+Kode yang tertulis di file ini merupakan gerbang akses demonstrasi,
+bukan mekanisme autentikasi yang kuat.
