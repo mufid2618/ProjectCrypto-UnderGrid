@@ -29,6 +29,10 @@ from database import db_manager
 from ui.components import render_brand
 
 
+# ---------------------------------------------------------
+# STATE FACE RECOGNITION
+# ---------------------------------------------------------
+
 class FaceState:
     """Status bersama antara callback video dan tampilan Streamlit."""
 
@@ -37,17 +41,17 @@ class FaceState:
         self.last_check = 0.0
         self.match_streak = 0
         self.matched = False
-        self.message = "Kamera belum aktif. Tekan START untuk memulai."
+        self.message = "Menunggu kamera aktif..."
 
 
 def _get_challenge():
     if "ug_challenge" not in st.session_state:
         st.session_state["ug_challenge"] = generate_challenge()
+
     return st.session_state["ug_challenge"]
 
 
 def _show_result(key: str) -> None:
-    """Menampilkan hasil autentikasi di bawah bagian masing-masing."""
     result = st.session_state.get(key)
 
     if not result:
@@ -64,9 +68,8 @@ def _show_result(key: str) -> None:
 # ---------------------------------------------------------
 
 def _find_buyer_from_usb():
-    """Mencari Buyer berdasarkan username dalam file USB,
-    kemudian memvalidasi token terhadap database.
-    """
+    """Mencari dan memvalidasi USB dongle terhadap database."""
+
     drives = detect_removable_drives()
 
     if not drives:
@@ -92,8 +95,10 @@ def _find_buyer_from_usb():
             if not buyer:
                 continue
 
-            # Token harus cocok dengan hash di database.
-            if not verify_dongle(buyer, drives=[str(key_file.parent)]):
+            if not verify_dongle(
+                buyer,
+                drives=[str(key_file.parent)]
+            ):
                 continue
 
             if buyer["account_status"] != "active":
@@ -108,59 +113,70 @@ def _find_buyer_from_usb():
 
 
 def _render_usb_stage():
+    """Memindai USB secara otomatis setiap satu detik."""
+
     render_brand()
+
     st.markdown("## 01 — USB Dongle Verification")
-    st.caption("Tahap pertama: periksa perangkat USB yang terdaftar.")
+    st.caption(
+        "Sistem sedang memindai perangkat USB yang terdaftar secara otomatis."
+    )
 
-    # Pemeriksaan otomatis saat pertama kali masuk tahap ini.
-    if not st.session_state.get("ug_usb_checked", False):
+    @st.fragment(run_every="1s")
+    def usb_scanner():
         buyer, message = _find_buyer_from_usb()
-
-        st.session_state["ug_usb_checked"] = True
 
         if buyer:
             st.session_state["ug_usb_buyer_id"] = buyer["id"]
             st.session_state["ug_usb_username"] = buyer["username"]
             st.session_state["ug_usb_verified"] = True
+            st.session_state["ug_face_verified"] = False
             st.session_state["ug_face_state"] = FaceState()
             st.session_state["ug_stage"] = "biometric"
+
+            st.success("USB Dongle berhasil diverifikasi.")
+            st.caption("Mengalihkan ke tahap pengenalan wajah...")
+
             st.rerun()
-        else:
-            st.session_state["ug_usb_error"] = message
 
-    if st.session_state.get("ug_usb_error"):
-        st.error("USB Dongle: " + st.session_state["ug_usb_error"])
-        st.caption("Pasang USB yang sudah didaftarkan, lalu coba kembali.")
+        st.session_state["ug_usb_verified"] = False
+        st.session_state["ug_usb_error"] = message
 
-    if st.button("PERIKSA ULANG USB", use_container_width=True):
-        st.session_state["ug_usb_checked"] = False
-        st.session_state.pop("ug_usb_error", None)
-        st.rerun()
+        st.info("Memindai USB dongle...")
+        st.warning(message)
+        st.caption(
+            "Pasang USB yang telah terdaftar. "
+            "Sistem akan memeriksa kembali secara otomatis."
+        )
+
+    usb_scanner()
 
 
 # ---------------------------------------------------------
-# TAHAP 2: BIOMETRIC REALTIME
+# TAHAP 2: FACE RECOGNITION REALTIME
 # ---------------------------------------------------------
 
 def _build_face_callback(known_encoding, state):
-    """Membandingkan wajah dari frame kamera secara berkala."""
+    """Memproses maksimal sekitar tiga frame setiap detik."""
+
     import face_recognition
 
     def video_frame_callback(frame):
         now = time.monotonic()
 
-        # Batasi pemrosesan agar CPU tidak terlalu terbebani.
+        # Batasi pemrosesan menjadi maksimal sekitar 3 sampel/detik.
         with state.lock:
             if state.matched:
                 return frame
 
-            if now - state.last_check < 0.8:
+            if now - state.last_check < (1 / 3):
                 return frame
 
             state.last_check = now
 
         try:
             image = frame.to_ndarray(format="rgb24")
+
             locations = face_recognition.face_locations(
                 image,
                 model="hog"
@@ -168,13 +184,14 @@ def _build_face_callback(known_encoding, state):
 
             if len(locations) == 0:
                 message = "Wajah belum terdeteksi. Arahkan wajah ke kamera."
-                streak = 0
-                matched = False
+                matched_now = False
 
             elif len(locations) > 1:
-                message = "Terdeteksi lebih dari satu wajah. Gunakan satu wajah."
-                streak = 0
-                matched = False
+                message = (
+                    "Terdeteksi lebih dari satu wajah. "
+                    "Gunakan satu wajah saja."
+                )
+                matched_now = False
 
             else:
                 encodings = face_recognition.face_encodings(
@@ -184,8 +201,8 @@ def _build_face_callback(known_encoding, state):
 
                 if len(encodings) != 1:
                     message = "Encoding wajah gagal diproses."
-                    streak = 0
-                    matched = False
+                    matched_now = False
+
                 else:
                     distance = float(
                         face_recognition.face_distance(
@@ -198,27 +215,39 @@ def _build_face_callback(known_encoding, state):
                         current_streak = state.match_streak
 
                     if distance <= FACE_THRESHOLD:
-                        streak = current_streak + 1
-                        matched = streak >= 3
-                        message = (
-                            f"Wajah cocok. Konfirmasi {min(streak, 3)}/3."
-                            if not matched
-                            else "Wajah berhasil diverifikasi."
-                        )
+                        new_streak = current_streak + 1
+                        matched_now = new_streak >= 3
+
+                        if matched_now:
+                            message = "Wajah berhasil diverifikasi."
+                        else:
+                            message = (
+                                f"Wajah cocok. "
+                                f"Konfirmasi {new_streak}/3."
+                            )
+
                     else:
-                        streak = 0
-                        matched = False
+                        new_streak = 0
+                        matched_now = False
                         message = "Wajah tidak cocok dengan data Buyer."
 
+                    with state.lock:
+                        state.match_streak = new_streak
+
+            if len(locations) != 1:
+                with state.lock:
+                    state.match_streak = 0
+
             with state.lock:
-                state.match_streak = streak
                 state.message = message
-                if matched:
+
+                if matched_now:
                     state.matched = True
 
         except Exception:
             with state.lock:
                 state.match_streak = 0
+                state.matched = False
                 state.message = (
                     "Terjadi kesalahan saat memproses video wajah."
                 )
@@ -229,30 +258,60 @@ def _build_face_callback(known_encoding, state):
 
 
 def _render_live_face(known_encoding, buyer_id):
+    """Menjalankan kamera dan memantau hasil Face Recognition."""
+
     if webrtc_streamer is None:
         st.error(
-            "Komponen kamera realtime belum terpasang. "
-            "Jalankan: python -m pip install streamlit-webrtc"
+            "Komponen kamera belum terpasang. Jalankan perintah:"
         )
+        st.code("python -m pip install streamlit-webrtc")
         return
 
     if not hasattr(st, "fragment"):
-        st.error("Perbarui Streamlit ke versi 1.37 atau lebih baru.")
+        st.error(
+            "Versi Streamlit belum mendukung fragment. "
+            "Perbarui Streamlit terlebih dahulu."
+        )
         return
 
     state = st.session_state["ug_face_state"]
 
     try:
         callback = _build_face_callback(known_encoding, state)
-    except Exception:
+    except Exception as error:
         st.error(
-            "Face recognition tidak dapat dijalankan. "
+            "Face Recognition tidak dapat dijalankan. "
             "Periksa instalasi face_recognition dan dlib."
         )
+        st.caption(str(error))
         return
 
     @st.fragment(run_every="1s")
     def live_face_status():
+
+        # Pastikan USB yang digunakan masih sama dan masih valid.
+        current_buyer, usb_message = _find_buyer_from_usb()
+
+        if (
+            not current_buyer
+            or current_buyer["id"] != buyer_id
+        ):
+            with state.lock:
+                state.match_streak = 0
+                state.matched = False
+                state.message = "USB dongle terputus."
+
+            st.session_state["ug_usb_verified"] = False
+            st.session_state["ug_face_verified"] = False
+            st.session_state["ug_stage"] = "usb"
+            st.session_state["ug_usb_error"] = (
+                "USB dilepas atau tidak lagi valid. "
+                "Silakan pasang kembali USB dongle."
+            )
+
+            st.warning("USB dongle tidak terdeteksi.")
+            st.rerun()
+
         ctx = webrtc_streamer(
             key=f"ug-face-{buyer_id}",
             video_frame_callback=callback,
@@ -261,21 +320,28 @@ def _render_live_face(known_encoding, buyer_id):
                 "audio": False,
             },
             media_toggle_controls=False,
+            desired_playing_state=True,
         )
 
         with state.lock:
             matched = state.matched
             message = state.message
 
-        if matched:
+        if matched and ctx.state.playing:
             st.session_state["ug_face_verified"] = True
             st.session_state["ug_stage"] = "login"
+
+            st.success("Face Recognition berhasil.")
             st.rerun()
 
         elif not ctx.state.playing:
+            with state.lock:
+                state.match_streak = 0
+                state.matched = False
+
             st.info(
-                "Tekan START dan izinkan browser mengakses kamera. "
-                "Pengenalan wajah akan berjalan otomatis."
+                "Menunggu izin kamera dari browser. "
+                "Izinkan akses kamera apabila muncul permintaan izin."
             )
 
         else:
@@ -283,6 +349,7 @@ def _render_live_face(known_encoding, buyer_id):
                 "tidak cocok" in message.lower()
                 or "lebih dari satu" in message.lower()
                 or "gagal" in message.lower()
+                or "kesalahan" in message.lower()
             ):
                 st.error("Biometric: " + message)
             else:
@@ -298,17 +365,19 @@ def _render_biometric_stage():
     buyer = db_manager.get_buyer_by_username(username or "")
 
     if not buyer or buyer["id"] != buyer_id:
-        st.error("Identitas Buyer dari USB tidak dapat divalidasi ulang.")
-        st.stop()
+        st.error("Identitas Buyer dari USB tidak dapat divalidasi.")
+        st.session_state["ug_stage"] = "usb"
+        st.rerun()
 
     render_brand()
+
     st.markdown("## 02 — Biometric Verification")
 
     st.success("USB Dongle: berhasil diverifikasi.")
     st.caption("Buyer terdeteksi: " + username)
 
     if not buyer.get("face_encoding_enc"):
-        st.error("Template wajah Buyer belum terdaftar di database.")
+        st.error("Template wajah Buyer belum terdaftar.")
         st.stop()
 
     try:
@@ -320,16 +389,19 @@ def _render_biometric_stage():
         st.error("Template wajah gagal dibuka atau tidak valid.")
         st.stop()
 
+    if "ug_face_state" not in st.session_state:
+        st.session_state["ug_face_state"] = FaceState()
+
     st.caption(
-        "Arahkan wajah ke kamera. Sistem akan mencocokkan wajah "
-        "secara otomatis tanpa tombol AUTHENTICATE."
+        "Kamera akan diaktifkan secara otomatis setelah browser "
+        "memberikan izin. Sistem akan memproses wajah secara berkala."
     )
 
     _render_live_face(reference, buyer_id)
 
     st.warning(
         "Pengenalan wajah ini belum memiliki liveness detection. "
-        "Kecocokan wajah saja belum dapat menjamin bahwa wajah berasal "
+        "Kecocokan wajah saja belum menjamin bahwa wajah berasal "
         "dari orang hidup di depan kamera."
     )
 
@@ -350,14 +422,42 @@ def _regenerate_challenge():
 
 
 def _submit_login():
-    """Callback login. Callback dijalankan sebelum widget dirender ulang."""
+    """Memvalidasi USB, Face Recognition, password, dan Vigenere."""
+
     username = st.session_state.get("ug_usb_username", "")
     buyer_id = st.session_state.get("ug_usb_buyer_id")
     password = st.session_state.get("ug_password", "")
 
+    # Pastikan seluruh tahap sebelumnya sudah berhasil.
+    if not st.session_state.get("ug_usb_verified"):
+        st.session_state["ug_password_result"] = {
+            "ok": False,
+            "message": "USB dongle belum diverifikasi."
+        }
+        return
+
+    if not st.session_state.get("ug_face_verified"):
+        st.session_state["ug_password_result"] = {
+            "ok": False,
+            "message": "Face Recognition belum berhasil."
+        }
+        return
+
+    # Validasi ulang USB saat tombol login ditekan.
+    current_buyer, usb_message = _find_buyer_from_usb()
+
+    if not current_buyer or current_buyer["id"] != buyer_id:
+        st.session_state["ug_password_result"] = {
+            "ok": False,
+            "message": "USB dongle tidak valid atau telah dilepas."
+        }
+        st.session_state["ug_usb_verified"] = False
+        st.session_state["ug_face_verified"] = False
+        st.session_state["ug_stage"] = "usb"
+        return
+
     buyer = db_manager.get_buyer_by_username(username)
 
-    # Verifikasi password Argon2id.
     password_record = None
 
     if buyer and buyer["id"] == buyer_id:
@@ -377,7 +477,6 @@ def _submit_login():
         ),
     }
 
-    # Verifikasi Vigenere challenge.
     challenge = st.session_state.get("ug_challenge")
     token = st.session_state.get("ug_token", "")
 
@@ -386,20 +485,18 @@ def _submit_login():
     st.session_state["ug_vigenere_result"] = {
         "ok": challenge_ok,
         "message": (
-            "Jawaban Vigenère benar."
+            "Jawaban Vigenere benar."
             if challenge_ok
-            else "Token Vigenère salah atau sudah digunakan."
+            else "Token Vigenere salah atau sudah digunakan."
         ),
     }
 
-    # Challenge selalu sekali pakai, baik berhasil maupun gagal.
+    # Challenge hanya dapat digunakan sekali.
     st.session_state["ug_challenge"] = generate_challenge()
 
-    # Aman diubah di callback sebelum widget dirender ulang.
     st.session_state["ug_password"] = ""
     st.session_state["ug_token"] = ""
 
-    # Semua tahap wajib berhasil.
     if password_ok and challenge_ok:
         st.session_state["buyer_id"] = buyer["id"]
         st.session_state["buyer_username"] = buyer["username"]
@@ -417,19 +514,23 @@ def _render_login_stage():
     username = st.session_state.get("ug_usb_username", "")
 
     render_brand()
+
     st.markdown("## 03 — Buyer Login")
 
-    # Tampilkan keberhasilan tahap sebelumnya secara terpisah.
     if st.session_state.get("ug_usb_verified"):
         st.success("USB Dongle: berhasil diverifikasi.")
 
     if st.session_state.get("ug_face_verified"):
         st.success("Biometric: wajah berhasil diverifikasi.")
 
-    login_col, challenge_col = st.columns([1, 1], gap="large")
+    login_col, challenge_col = st.columns(
+        [1, 1],
+        gap="large"
+    )
 
     with login_col:
         st.markdown("### Login")
+
         st.text_input(
             "USERNAME",
             value=username,
@@ -443,13 +544,13 @@ def _render_login_stage():
             key="ug_password"
         )
 
-        # Status password berada tepat di bawah bagian login.
         _show_result("ug_password_result")
 
     with challenge_col:
         challenge = _get_challenge()
 
-        st.markdown("### Vigenère Challenge")
+        st.markdown("### Vigenere Challenge")
+
         st.caption(
             "Dekripsikan ciphertext menggunakan kunci yang disediakan."
         )
@@ -466,7 +567,6 @@ def _render_login_stage():
             placeholder="Masukkan plaintext A-Z"
         )
 
-        # Status Vigenère berada tepat di bawah input token.
         _show_result("ug_vigenere_result")
 
         st.button(
@@ -487,7 +587,8 @@ def _render_login_stage():
 # ---------------------------------------------------------
 
 def render_login():
-    # Jika autentikasi lengkap, app.py harus menampilkan dashboard.
+    """Mengatur perpindahan antartahap autentikasi."""
+
     if st.session_state.get("buyer_id"):
         return
 
