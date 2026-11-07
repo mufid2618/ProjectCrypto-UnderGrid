@@ -1,1 +1,0 @@
-"""Ledger blockchain sederhana Undergrid."""

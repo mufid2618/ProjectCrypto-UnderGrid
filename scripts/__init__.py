@@ -1,1 +1,0 @@
-"""Skrip administrasi CLI Undergrid."""

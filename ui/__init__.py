@@ -1,1 +1,0 @@
-"""Komponen antarmuka Undergrid."""
