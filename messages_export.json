@@ -1,0 +1,20 @@
+[
+  {
+    "id": 2,
+    "buyer_id": 3,
+    "recipient": "Admin/Pengelola",
+    "encrypted_message": "VUdNU0cxRSVWvsiR0Nxu1DA3cRQADJtRZnPbxe83cDjBvi0G2bPGhXNLgBzFbIgLCSBZAe-JD3womAR2v3KvmFazHdSUcQ==",
+    "created_at": "2026-11-06T11:57:34+00:00",
+    "message_status": "sent",
+    "plaintext": "Beli sekarang"
+  },
+  {
+    "id": 1,
+    "buyer_id": 3,
+    "recipient": "Admin/Pengelola",
+    "encrypted_message": "VUdNU0cxUeb-T9ghjJRBnX0MHrROKFaxaeCrjBNySzvUWM45w7Fh3PnXJY9t58muFi158JEv4TQ3Y-ZAofO-5TOynCAAUw==",
+    "created_at": "2026-11-06T11:54:28+00:00",
+    "message_status": "sent",
+    "plaintext": "beli ini"
+  }
+]
